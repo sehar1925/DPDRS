@@ -28,3 +28,13 @@ postman/
 # Dataset
 dataset/
 *.csv
+
+# Dataset (large files)
+../dataset/
+dataset/
+*.csv
+
+# Postman local
+../postman/
+postman/
+.postman/
