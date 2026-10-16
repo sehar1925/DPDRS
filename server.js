@@ -6,24 +6,20 @@ require('dotenv').config();
 
 const connectDB = require('./config/db');
 const authRoutes = require('./routes/authRoutes');
+const profileRoutes = require('./routes/profileRoutes');   // ← ADD
 
 const app = express();
 
-// ─────────────────────────────────────────────
 // MIDDLEWARE
-// ─────────────────────────────────────────────
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ─────────────────────────────────────────────
 // ROUTES
-// ─────────────────────────────────────────────
 app.use('/api/auth', authRoutes);
+app.use('/api/profile', profileRoutes);                    // ← ADD
 
-// ─────────────────────────────────────────────
-// BASIC TEST ROUTE
-// ─────────────────────────────────────────────
+// TEST ROUTE
 app.get('/', (req, res) => {
   res.json({
     message: 'DPDRS Backend is running',
@@ -32,9 +28,7 @@ app.get('/', (req, res) => {
   });
 });
 
-// ─────────────────────────────────────────────
 // START SERVER
-// ─────────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
 
 connectDB();

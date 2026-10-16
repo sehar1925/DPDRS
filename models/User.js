@@ -62,13 +62,14 @@ const userSchema = new mongoose.Schema(
       default: true,
     },
     accountStatus: {
-      type: String,
-      enum: ['active', 'pending_review', 'suspended', 'deleted'],
-      default: 'active',
-    },
+        type: String,
+         enum: ['active', 'pending_review', 'suspended', 'deleted'],
+         default: 'active',
+        },
+    // ─── SRS-125 to SRS-128: Account Deletion ───
     deletedAt: {
-      type: Date,
-      default: null,
+        type: Date,
+    default: null,
     },
   },
   { timestamps: true }

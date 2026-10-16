@@ -24,18 +24,19 @@ const loginUser = async (req, res) => {
       });
     }
 
-    if (!user.isActive) {
-      return res.status(403).json({
-        success: false,
-        message: 'Account is disabled. Please contact admin.',
-      });
-    }
+   
 
     // SRS-125: Prevent login for deleted accounts
     if (user.accountStatus === 'deleted' || user.deletedAt) {
       return res.status(403).json({
         success: false,
         message: 'This account has been deleted.',
+      });
+    }
+     if (!user.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: 'Account is disabled. Please contact admin.',
       });
     }
 
