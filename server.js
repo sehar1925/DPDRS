@@ -7,6 +7,7 @@ require('dotenv').config();
 const connectDB = require('./config/db');
 const authRoutes = require('./routes/authRoutes');
 const profileRoutes = require('./routes/profileRoutes');   // ← ADD
+const predictionRoutes = require('./routes/predictionRoutes');
 
 const app = express();
 
@@ -17,7 +18,9 @@ app.use(express.urlencoded({ extended: true }));
 
 // ROUTES
 app.use('/api/auth', authRoutes);
-app.use('/api/profile', profileRoutes);                    // ← ADD
+app.use('/api/profile', profileRoutes);
+app.use('/api/prediction', predictionRoutes);
+                    // ← ADD
 
 // TEST ROUTE
 app.get('/', (req, res) => {
