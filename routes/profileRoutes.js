@@ -4,7 +4,10 @@
 const express = require('express');
 const router = express.Router();
 
+// ✅ Controllers import karein
 const { getProfile, updateProfile } = require('../controllers/profileController');
+
+// ✅ Auth Middleware import karein
 const { protect } = require('../middleware/authMiddleware');
 
 // ─────────────────────────────────────────────

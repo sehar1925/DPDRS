@@ -13,7 +13,7 @@ const predictFromSymptoms = async (req, res) => {
   try {
     const { symptoms, symptomDetails } = req.body;
 
-    // SRS-18: Validate symptoms
+    // ─── SRS-18: Validate symptoms array ───
     if (!symptoms || !Array.isArray(symptoms) || symptoms.length === 0) {
       return res.status(400).json({
         success: false,
@@ -39,7 +39,7 @@ const predictFromSymptoms = async (req, res) => {
       });
     }
 
-    // SRS-19: Get disease reference database
+    // ─── SRS-19: Get disease reference database ───
     const diseasesReference = await Disease.find({}).lean();
 
     if (!diseasesReference || diseasesReference.length === 0) {
@@ -51,7 +51,7 @@ const predictFromSymptoms = async (req, res) => {
 
     console.log(`🔍 Predicting for ${cleanSymptoms.length} symptoms...`);
 
-    // SRS-31 to SRS-41: Call Gemini AI
+    // ─── SRS-31 to SRS-41: Call Gemini AI ───
     let aiResult;
     try {
       aiResult = await predictDisease(cleanSymptoms, diseasesReference);
@@ -63,7 +63,7 @@ const predictFromSymptoms = async (req, res) => {
       });
     }
 
-    // SRS-20, SRS-33, SRS-39: Map predicted diseases with DB IDs
+    // ─── SRS-20, SRS-33, SRS-39: Map predicted diseases with DB IDs ───
     const predictedDiseasesWithIds = [];
 
     for (const predicted of aiResult.predictedDiseases) {
@@ -79,21 +79,22 @@ const predictFromSymptoms = async (req, res) => {
       });
     }
 
-    // SRS-36: Top prediction
+    // ─── SRS-36: Top prediction (highest confidence) ───
     const topPredictionDoc = diseasesReference.find(
       (d) =>
         d.diseaseName.toLowerCase() ===
         aiResult.predictedDiseases[0].diseaseName.toLowerCase()
     );
 
-    // SRS-40, SRS-41: Precautions & self-care
+    // ─── SRS-40, SRS-41: Precautions & self-care ───
+    // Prefer DB precautions if available, else use AI precautions
     const precautionsFromDB = topPredictionDoc ? topPredictionDoc.precautions : [];
     const finalPrecautions =
       precautionsFromDB && precautionsFromDB.length > 0
         ? precautionsFromDB
         : aiResult.precautions || [];
 
-    // Create Prediction document
+    // ─── Create Prediction document ───
     const prediction = await Prediction.create({
       patientId: req.user._id,
       symptoms: cleanSymptoms,
@@ -110,7 +111,7 @@ const predictFromSymptoms = async (req, res) => {
       status: aiResult.isEmergency ? 'emergency' : 'completed',
     });
 
-    // Response
+    // ✅ FIXED: Response format (Frontend ke mutabiq)
     res.status(201).json({
       success: true,
       message: 'Disease prediction completed successfully',

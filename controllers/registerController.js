@@ -2,12 +2,13 @@
 // SRS-01 to SRS-04: Register User
 
 const User = require('../models/User');
+const generateToken = require('../utils/generateToken'); // ✅ Token generate karne ke liye import kiya
 
 const registerUser = async (req, res) => {
   try {
-    const { fullName, email, password, age, gender } = req.body;
+    const { fullName, email, password, age, gender, phone } = req.body;
 
-    // Validate fields
+    // Validate required fields
     if (!fullName || !email || !password || !age || !gender) {
       return res.status(400).json({
         success: false,
@@ -15,7 +16,7 @@ const registerUser = async (req, res) => {
       });
     }
 
-    // Check if user exists
+    // Check if user already exists
     const existingUser = await User.findOne({ email: email.toLowerCase() });
     if (existingUser) {
       return res.status(400).json({
@@ -25,8 +26,19 @@ const registerUser = async (req, res) => {
     }
 
     // Create user (password auto-hashed by pre-save hook)
-    const user = await User.create({ fullName, email, password, age, gender });
+    const user = await User.create({ 
+      fullName, 
+      email, 
+      password, 
+      age, 
+      gender,
+      phone: phone || null 
+    });
 
+    // ✅ Token Generate Karein (Auto-login ke liye)
+    const token = generateToken(user._id);
+
+    // ✅ Response mein Token, Phone aur baqi data bhejein
     res.status(201).json({
       success: true,
       message: 'User registered successfully',
@@ -36,7 +48,9 @@ const registerUser = async (req, res) => {
         email: user.email,
         age: user.age,
         gender: user.gender,
+        phone: user.phone,
         role: user.role,
+        token: token, // ✅ Frontend isko save karega
         createdAt: user.createdAt,
       },
     });
