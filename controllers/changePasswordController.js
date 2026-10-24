@@ -7,6 +7,7 @@ const changePassword = async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
 
+    // 1. Validate fields
     if (!currentPassword || !newPassword) {
       return res.status(400).json({
         success: false,
@@ -14,6 +15,7 @@ const changePassword = async (req, res) => {
       });
     }
 
+    // 2. Validate new password length
     if (newPassword.length < 6) {
       return res.status(400).json({
         success: false,
@@ -21,6 +23,7 @@ const changePassword = async (req, res) => {
       });
     }
 
+    // 3. Check if new password is different
     if (currentPassword === newPassword) {
       return res.status(400).json({
         success: false,
@@ -28,6 +31,7 @@ const changePassword = async (req, res) => {
       });
     }
 
+    // 4. Get user with password field
     const user = await User.findById(req.user._id).select('+password');
 
     if (!user) {
@@ -37,6 +41,7 @@ const changePassword = async (req, res) => {
       });
     }
 
+    // 5. Verify current password (Yeh sabse ahem step hai)
     const isMatch = await user.comparePassword(currentPassword);
     if (!isMatch) {
       return res.status(401).json({
@@ -45,9 +50,11 @@ const changePassword = async (req, res) => {
       });
     }
 
+    // 6. Update password (auto-hashed by pre-save hook)
     user.password = newPassword;
     await user.save();
 
+    // 7. Success response
     res.status(200).json({
       success: true,
       message: 'Password changed successfully',

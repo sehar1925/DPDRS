@@ -2,7 +2,7 @@
 // SRS-01 to SRS-04: Register User
 
 const User = require('../models/User');
-const generateToken = require('../utils/generateToken'); // ✅ Token generate karne ke liye import kiya
+const generateToken = require('../utils/generateToken');
 
 const registerUser = async (req, res) => {
   try {
@@ -18,14 +18,21 @@ const registerUser = async (req, res) => {
 
     // Check if user already exists
     const existingUser = await User.findOne({ email: email.toLowerCase() });
+    
     if (existingUser) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email is already registered. Please login instead.',
-      });
+      // ✅ Agar account pehle delete ho chuka hai, toh usko permanently delete karein
+      if (existingUser.accountStatus === 'deleted') {
+        await User.findByIdAndDelete(existingUser._id);
+      } else {
+        // Agar account active hai, toh error dein
+        return res.status(400).json({
+          success: false,
+          message: 'Email is already registered. Please login instead.',
+        });
+      }
     }
 
-    // Create user (password auto-hashed by pre-save hook)
+    // Create new user (password auto-hashed by pre-save hook)
     const user = await User.create({ 
       fullName, 
       email, 

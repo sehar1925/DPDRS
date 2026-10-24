@@ -8,7 +8,7 @@ const { GoogleGenAI } = require('@google/genai');
 // Initialize Gemini client
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-const MODEL_NAME = 'gemini-3.8-flash';
+const MODEL_NAME = 'gemini-3.6-flash'; // 3.8 se 3.6 kar dein
 
 // ═══════════════════════════════════════════════
 // Build prompt for Gemini with disease reference data
