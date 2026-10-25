@@ -8,6 +8,7 @@ const connectDB = require('./config/db');
 const authRoutes = require('./routes/authRoutes');
 const profileRoutes = require('./routes/profileRoutes');   // ← ADD
 const predictionRoutes = require('./routes/predictionRoutes');
+const doctorRoutes = require('./routes/doctorRoutes');
 
 const app = express();
 
@@ -20,7 +21,8 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/api/auth', authRoutes);
 app.use('/api/profile', profileRoutes);
 app.use('/api/prediction', predictionRoutes);
-                    // ← ADD
+app.use('/api/doctors', doctorRoutes);
+                    
 
 // TEST ROUTE
 app.get('/', (req, res) => {
