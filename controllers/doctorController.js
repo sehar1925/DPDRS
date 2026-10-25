@@ -88,60 +88,69 @@ const DISEASE_SPECIALIST_MAP = {
 };
 
 // ═══════════════════════════════════════════════
-// SRS-42 to 48: Recommend Doctors by Disease
+// SRS-42 to 48: Recommend Doctors by Disease/Search
 // POST /api/doctors/recommend
 // ═══════════════════════════════════════════════
 const recommendDoctors = async (req, res) => {
   try {
-    const { diseaseName, city } = req.body;
+    // ✅ Search Query receive karein
+    const { diseaseName, city, searchQuery } = req.body;
 
-    if (!diseaseName) {
+    if (!diseaseName && !searchQuery) {
       return res.status(400).json({
         success: false,
-        message: 'Disease name is required',
+        message: 'Disease name or Search query is required',
       });
     }
 
-    // Step 1: Map disease to specialist
-    const normalizedDisease = diseaseName.toLowerCase().trim();
-    let requiredSpecialization = DISEASE_SPECIALIST_MAP[normalizedDisease];
+    let requiredSpecialization = 'General Physician';
 
-    // Agar exact match nahi mila, toh partial search karo
-    if (!requiredSpecialization) {
-      for (const [key, spec] of Object.entries(DISEASE_SPECIALIST_MAP)) {
-        if (normalizedDisease.includes(key) || key.includes(normalizedDisease)) {
-          requiredSpecialization = spec;
-          break;
+    // Step 1: Map disease to specialist (Agar diseaseName diya gaya hai)
+    if (diseaseName) {
+      const normalizedDisease = diseaseName.toLowerCase().trim();
+      let mappedSpecialist = DISEASE_SPECIALIST_MAP[normalizedDisease];
+
+      if (!mappedSpecialist) {
+        for (const [key, spec] of Object.entries(DISEASE_SPECIALIST_MAP)) {
+          if (normalizedDisease.includes(key) || key.includes(normalizedDisease)) {
+            mappedSpecialist = spec;
+            break;
+          }
         }
       }
+      requiredSpecialization = mappedSpecialist || 'General Physician';
+      console.log(`🔍 Disease: "${diseaseName}" → Specialist: ${requiredSpecialization}`);
     }
-
-    // Fallback
-    if (!requiredSpecialization) {
-      requiredSpecialization = 'General Physician';
-    }
-
-    console.log(`🔍 Disease: "${diseaseName}" → Specialist: ${requiredSpecialization}`);
 
     // Step 2: Query doctors
     const query = {
-      specialization: requiredSpecialization,
-      verificationStatus: 'verified', // SRS: Sirf verified doctors
+      verificationStatus: 'verified',
       isAvailable: true,
     };
 
-    // Optional city filter
+    // ✅ Agar Search Query di gayi hai (SRS-45: Naam ya Category se search)
+    if (searchQuery) {
+      query.$or = [
+        { fullName: { $regex: searchQuery, $options: 'i' } },
+        { specialization: { $regex: searchQuery, $options: 'i' } },
+      ];
+    } else {
+      // Agar normal disease prediction hai toh specialist filter lagayein
+      query.specialization = requiredSpecialization;
+    }
+
+    // ✅ City Filter (SRS-46, 47)
     if (city) {
       query.city = { $regex: new RegExp(city, 'i') };
     }
 
-    const doctors = await Doctor.find(query).sort({ rating: -1 }); // Highest rating first
+    const doctors = await Doctor.find(query).sort({ rating: -1 });
 
     res.status(200).json({
       success: true,
       message: doctors.length > 0 
-        ? `Found ${doctors.length} doctors for "${diseaseName}"` 
-        : `No ${requiredSpecialization} available. Showing all available doctors.`,
+        ? `Found ${doctors.length} doctors` 
+        : `No doctors available matching your criteria.`,
       data: {
         recommendedSpecialist: requiredSpecialization,
         totalDoctors: doctors.length,
