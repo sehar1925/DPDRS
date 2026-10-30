@@ -5,10 +5,8 @@ const Doctor = require('../models/Doctor');
 
 // ═══════════════════════════════════════════════
 // Disease to Specialization Mapping
-// SRS-43, SRS-44: Match Specialists
 // ═══════════════════════════════════════════════
 const DISEASE_SPECIALIST_MAP = {
-  // Respiratory
   'common cold': 'General Physician',
   'flu': 'General Physician',
   'influenza': 'General Physician',
@@ -18,22 +16,16 @@ const DISEASE_SPECIALIST_MAP = {
   'asthma': 'Pulmonologist',
   'tuberculosis': 'Pulmonologist',
   'copd': 'Pulmonologist',
-
-  // Cardiac
   'heart attack': 'Cardiologist',
   'angina': 'Cardiologist',
   'heart failure': 'Cardiologist',
   'hypertension': 'Cardiologist',
   'arrhythmia': 'Cardiologist',
-
-  // Skin
   'acne': 'Dermatologist',
   'eczema': 'Dermatologist',
   'psoriasis': 'Dermatologist',
   'skin infection': 'Dermatologist',
   'skin pigmentation disorder': 'Dermatologist',
-
-  // Gastric
   'gastritis': 'Gastroenterologist',
   'ulcer': 'Gastroenterologist',
   'gastroenteritis': 'Gastroenterologist',
@@ -42,46 +34,32 @@ const DISEASE_SPECIALIST_MAP = {
   'cholecystitis': 'Gastroenterologist',
   'gallstone': 'Gastroenterologist',
   'esophagitis': 'Gastroenterologist',
-
-  // Neuro
   'migraine': 'Neurologist',
   'epilepsy': 'Neurologist',
   'stroke': 'Neurologist',
   'parkinson': 'Neurologist',
   'multiple sclerosis': 'Neurologist',
-
-  // Mental Health
   'depression': 'Psychiatrist',
   'anxiety': 'Psychiatrist',
   'panic disorder': 'Psychiatrist',
   'schizophrenia': 'Psychiatrist',
   'bipolar': 'Psychiatrist',
-
-  // Orthopedic
   'arthritis': 'Orthopedic',
   'arthritis of the hip': 'Orthopedic',
   'fracture': 'Orthopedic',
   'back pain': 'Orthopedic',
   'osteoporosis': 'Orthopedic',
-
-  // Gynecologist
   'vaginitis': 'Gynecologist',
   'pelvic inflammatory disease': 'Gynecologist',
   'threatened pregnancy': 'Gynecologist',
   'vulvodynia': 'Gynecologist',
   'pcos': 'Gynecologist',
-
-  // Pediatric (for children's diseases)
   'measles': 'Pediatrician',
   'chickenpox': 'Pediatrician',
   'croup': 'Pediatrician',
-
-  // ENT
   'sinusitis': 'ENT Specialist',
   'otitis media': 'ENT Specialist',
   'tonsillitis': 'ENT Specialist',
-
-  // Eye
   'conjunctivitis': 'Ophthalmologist',
   'macular degeneration': 'Ophthalmologist',
   'cornea infection': 'Ophthalmologist',
@@ -93,20 +71,28 @@ const DISEASE_SPECIALIST_MAP = {
 // ═══════════════════════════════════════════════
 const recommendDoctors = async (req, res) => {
   try {
-    // ✅ Search Query receive karein
-    const { diseaseName, city, searchQuery } = req.body;
+    const { diseaseName, city, searchQuery, isGeneral } = req.body;
 
-    if (!diseaseName && !searchQuery) {
-      return res.status(400).json({
-        success: false,
-        message: 'Disease name or Search query is required',
-      });
+    // Base Query
+    const query = {
+      verificationStatus: 'verified',
+      isAvailable: true,
+    };
+
+    // 1. City Filter
+    if (city && city.trim() !== '') {
+      query.city = { $regex: new RegExp(city, 'i') };
     }
 
-    let requiredSpecialization = 'General Physician';
-
-    // Step 1: Map disease to specialist (Agar diseaseName diya gaya hai)
-    if (diseaseName) {
+    // 2. Search Query Filter (agar user ne search box mein kuch likha hai)
+    if (searchQuery && searchQuery.trim() !== '') {
+      query.$or = [
+        { fullName: { $regex: searchQuery, $options: 'i' } },
+        { specialization: { $regex: searchQuery, $options: 'i' } },
+      ];
+    } 
+    // 3. Agar General mode nahi hai (yani disease specific hai) aur search khali hai
+    else if (!isGeneral && diseaseName) {
       const normalizedDisease = diseaseName.toLowerCase().trim();
       let mappedSpecialist = DISEASE_SPECIALIST_MAP[normalizedDisease];
 
@@ -118,47 +104,23 @@ const recommendDoctors = async (req, res) => {
           }
         }
       }
-      requiredSpecialization = mappedSpecialist || 'General Physician';
-      console.log(`🔍 Disease: "${diseaseName}" → Specialist: ${requiredSpecialization}`);
-    }
-
-    // Step 2: Query doctors
-    const query = {
-      verificationStatus: 'verified',
-      isAvailable: true,
-    };
-
-    // ✅ Agar Search Query di gayi hai (SRS-45: Naam ya Category se search)
-    if (searchQuery) {
-      query.$or = [
-        { fullName: { $regex: searchQuery, $options: 'i' } },
-        { specialization: { $regex: searchQuery, $options: 'i' } },
-      ];
-    } else {
-      // Agar normal disease prediction hai toh specialist filter lagayein
-      query.specialization = requiredSpecialization;
-    }
-
-    // ✅ City Filter (SRS-46, 47)
-    if (city) {
-      query.city = { $regex: new RegExp(city, 'i') };
+      query.specialization = mappedSpecialist || 'General Physician';
     }
 
     const doctors = await Doctor.find(query).sort({ rating: -1 });
 
+    // Response Data Format
     res.status(200).json({
       success: true,
-      message: doctors.length > 0 
-        ? `Found ${doctors.length} doctors` 
-        : `No doctors available matching your criteria.`,
+      message: doctors.length > 0 ? `Found ${doctors.length} doctors` : `No doctors available matching your criteria.`,
       data: {
-        recommendedSpecialist: requiredSpecialization,
+        recommendedSpecialist: isGeneral ? 'All Specialists' : (query.specialization || 'All Specialists'),
         totalDoctors: doctors.length,
         doctors: doctors.map((doc) => ({
           id: doc._id,
           fullName: doc.fullName,
           specialization: doc.specialization,
-          degrees: doc.degrees,
+          degrees: doc.degrees || [],
           yearsOfExperience: doc.yearsOfExperience,
           consultationFee: doc.consultationFee,
           rating: doc.rating,
@@ -173,10 +135,7 @@ const recommendDoctors = async (req, res) => {
     });
   } catch (error) {
     console.error('Recommend doctors error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error. Please try again later.',
-    });
+    res.status(500).json({ success: false, message: 'Server error. Please try again later.' });
   }
 };
 
@@ -200,10 +159,7 @@ const getAllDoctors = async (req, res) => {
       data: doctors,
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 

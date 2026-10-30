@@ -25,6 +25,7 @@ const predictionSchema = new mongoose.Schema(
       },
     },
 
+    // Optional: Free-text notes
     symptomDetails: {
       type: String,
       default: '',
@@ -54,9 +55,13 @@ const predictionSchema = new mongoose.Schema(
           type: String,
           default: '',
         },
+        causes: { 
+          type: [String], 
+          default: [] },
+        riskFactors: { type: [String],
+           default: [] },
       },
     ],
-
     // SRS-36: Highest confidence prediction
     topPrediction: {
       type: mongoose.Schema.Types.ObjectId,
@@ -64,7 +69,7 @@ const predictionSchema = new mongoose.Schema(
       default: null,
     },
 
-    // SRS-40, SRS-41: Precautions and self-care
+    // SRS-40, SRS-41: Precautions and self-care guidelines
     precautions: {
       type: [String],
       default: [],
@@ -85,20 +90,34 @@ const predictionSchema = new mongoose.Schema(
       default: 'low',
     },
 
+    // Model versioning for auditability
     modelVersion: {
       type: String,
       default: 'gemini-3.8-flash',
     },
 
+    // SRS-37: Status of prediction
     status: {
       type: String,
       enum: ['pending', 'completed', 'overridden', 'emergency', 'failed'],
       default: 'completed',
     },
+
+    // Doctor override support (future)
+    doctorOverride: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Doctor',
+      default: null,
+    },
+    doctorOverrideNotes: {
+      type: String,
+      default: '',
+    },
   },
   { timestamps: true }
 );
 
+// Index for fast queries
 predictionSchema.index({ patientId: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Prediction', predictionSchema);

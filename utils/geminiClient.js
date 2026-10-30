@@ -1,154 +1,204 @@
-// DPDRS Backend - Gemini API Client
-// Handles AI-powered disease prediction using Google Gemini 3.8 Flash
-// SRS-31 to SRS-41: Intelligent Disease Prediction
-// With auto-retry logic for 503 (busy) errors
-
+// DPDRS Backend - Gemini AI Client (Strict & Fixed)
 const { GoogleGenAI } = require('@google/genai');
 
-// Initialize Gemini client
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
+  httpOptions: {
+    timeout: 60000,
+    retryOptions: {
+      attempts: 3,
+      initialDelay: 1,
+      maxDelay: 6,
+      expBase: 2,
+      jitter: 0.3,
+      httpStatusCodes: [408, 500, 502, 503, 504],
+    },
+  },
+});
+const MODEL_NAME = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+const FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.6-flash';
 
-const MODEL_NAME = 'gemini-3.6-flash'; // 3.8 se 3.6 kar dein
+class SymptomValidationError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'SymptomValidationError';
+    this.statusCode = 400;
+  }
+}
 
-// ═══════════════════════════════════════════════
-// Build prompt for Gemini with disease reference data
-// ═══════════════════════════════════════════════
+
+
+class GeminiQuotaError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'GeminiQuotaError';
+    this.statusCode = 429;
+  }
+}
+class PredictionNoMatchError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'PredictionNoMatchError';
+    this.statusCode = 422;
+  }
+}
 function buildPrompt(symptoms, diseasesReference) {
-  // Prepare compact disease reference (to save tokens)
-  const diseaseList = diseasesReference.map((d) => ({
+  const diseaseList = (diseasesReference || []).map((d) => ({
     name: d.diseaseName,
-    symptoms: d.symptoms.slice(0, 30),
-    severity: d.severity,
+    symptoms: (d.symptoms || []).slice(0, 20),
   }));
+  const allowedNames = diseaseList.map((d) => d.name);
 
-  return `You are a medical AI assistant for the Disease Prediction and Doctor Recommendation System (DPDRS).
+  return `You are a cautious symptom-matching assistant, not a doctor.
+Patient-reported symptoms only: ${JSON.stringify(symptoms)}
+Allowed disease names (choose exact names only): ${JSON.stringify(allowedNames)}
+Reference data: ${JSON.stringify(diseaseList)}
 
-TASK: Analyze the patient's symptoms and predict the most likely diseases.
+Rules:
+- Return only diseases whose exact name appears in Allowed disease names. Never invent or rename a disease.
+- Do not infer addiction, drug abuse, or a substance-use disorder from physical symptoms such as rash or abdominal pain. Only consider these if the patient explicitly reports relevant substance use or dependence.
+- Do not label a rash and abdominal pain alone as an allergy; allergy requires a relevant exposure/history or stronger allergy-specific evidence.
+- If the symptoms do not support a reliable match, return an empty predictedDiseases array. Do not guess.
+- Treat all results as possibilities, never as a confirmed diagnosis. Keep confidence conservative.
 
-PATIENT SYMPTOMS:
-${symptoms.map((s, i) => `${i + 1}. ${s}`).join('\n')}
-
-REFERENCE DISEASES DATABASE (100 diseases):
-${JSON.stringify(diseaseList, null, 2)}
-
-INSTRUCTIONS:
-1. Match the patient's symptoms against the reference database
-2. Return the TOP 3 most likely diseases with confidence scores (0.0 to 1.0)
-3. For each disease, provide brief reasoning
-4. Determine urgency level: "low", "medium", "high", or "critical"
-5. Set isEmergency to true if symptoms suggest a life-threatening condition
-6. Provide 3-5 relevant precautions
-7. Provide general self-care guidelines
-
-CRITICAL: Return ONLY valid JSON, no markdown, no explanation, no code blocks.
-
-Expected JSON format:
+Return ONLY JSON:
 {
   "predictedDiseases": [
-    {
-      "diseaseName": "exact disease name from reference",
-      "confidence": 0.85,
-      "reasoning": "brief explanation"
-    }
+    { "diseaseName": "exact name from allowed list", "confidence": 0.5, "reasoning": "...", "causes": [], "riskFactors": [] }
   ],
-  "urgencyLevel": "medium",
+  "urgencyLevel": "low",
   "isEmergency": false,
-  "precautions": ["precaution 1", "precaution 2", "precaution 3"],
-  "selfCareGuidelines": "general advice text"
+  "precautions": [],
+  "selfCareGuidelines": "..."
 }`;
 }
 
-// ═══════════════════════════════════════════════
-// Extract JSON from Gemini response
-// ═══════════════════════════════════════════════
 function extractJSON(text) {
   let cleaned = text.trim();
-
-  // Remove markdown code blocks if present
-  if (cleaned.startsWith('```')) {
-    cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '');
-  }
-
-  // Find first { and last }
+  if (cleaned.startsWith('```')) cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '');
   const firstBrace = cleaned.indexOf('{');
   const lastBrace = cleaned.lastIndexOf('}');
-
-  if (firstBrace === -1 || lastBrace === -1) {
-    throw new Error('No JSON found in Gemini response');
-  }
-
-  const jsonStr = cleaned.substring(firstBrace, lastBrace + 1);
-  return JSON.parse(jsonStr);
+  return JSON.parse(cleaned.substring(firstBrace, lastBrace + 1));
 }
 
-// ═══════════════════════════════════════════════
-// Main prediction function WITH RETRY LOGIC
-// ═══════════════════════════════════════════════
-async function predictDisease(symptoms, diseasesReference, maxRetries = 3) {
-  // Validate inputs
-  if (!symptoms || symptoms.length === 0) {
-    throw new Error('At least one symptom is required');
-  }
-
-  if (!diseasesReference || diseasesReference.length === 0) {
-    throw new Error('Disease reference database is empty');
-  }
-
-  const prompt = buildPrompt(symptoms, diseasesReference);
-
-  let lastError;
-
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      console.log(`🤖 Gemini API attempt ${attempt}/${maxRetries}...`);
-
-      const response = await ai.models.generateContent({
-        model: MODEL_NAME,
-        contents: prompt,
-      });
-
-      const responseText = response.text;
-
-      if (!responseText) {
-        throw new Error('Empty response from Gemini API');
-      }
-
-      console.log('✅ Gemini response received');
-
-      const prediction = extractJSON(responseText);
-
-      if (!prediction.predictedDiseases || !Array.isArray(prediction.predictedDiseases)) {
-        throw new Error('Invalid response: predictedDiseases missing');
-      }
-
-      // Sort by confidence (highest first)
-      prediction.predictedDiseases.sort((a, b) => b.confidence - a.confidence);
-
-      // Limit to top 3
-      prediction.predictedDiseases = prediction.predictedDiseases.slice(0, 3);
-
-      // Ensure all required fields
-      prediction.urgencyLevel = prediction.urgencyLevel || 'low';
-      prediction.isEmergency = prediction.isEmergency || false;
-      prediction.precautions = prediction.precautions || [];
-      prediction.selfCareGuidelines = prediction.selfCareGuidelines || '';
-
-      return prediction;
-    } catch (error) {
-      lastError = error;
-      console.log(`⚠️ Attempt ${attempt} failed: ${error.message.substring(0, 100)}`);
-
-      // If we have retries left, wait and retry
-      if (attempt < maxRetries) {
-        const waitTime = attempt * 5000; // 5s, 10s
-        console.log(`⏳ Waiting ${waitTime / 1000}s before retry...`);
-        await new Promise((resolve) => setTimeout(resolve, waitTime));
-      }
+async function predictDisease(symptoms, diseasesReference) {
+  // ✅ 1. Basic Check (Length aur Letters)
+  for (let sym of symptoms) {
+    if (sym.length < 3 || !/^[a-z\s_]+$/.test(sym)) {
+      throw new SymptomValidationError(`"${sym}" is not a valid medical symptom. Please enter valid symptoms like fever, cough, etc.`);
     }
   }
 
-  console.error('❌ All Gemini API attempts failed');
-  throw lastError;
+  // Accept symptoms shown by the app even when the imported disease dataset
+  // does not contain their exact wording. Custom symptoms still need a DB match.
+  const commonSymptoms = new Set([
+    'fever', 'cough', 'headache', 'fatigue', 'sore throat',
+    'shortness of breath', 'chest pain', 'nausea', 'vomiting',
+    'diarrhea', 'abdominal pain', 'rash', 'joint pain', 'muscle pain',
+    'dizziness', 'loss of appetite', 'chills', 'sweating', 'runny nose', 'sneezing',
+  ]);
+  const allDbSymptoms = diseasesReference.flatMap((d) =>
+    (d.symptoms || []).map((s) => s.toLowerCase().replace(/_/g, ' ').trim())
+  );
+
+  for (const sym of symptoms) {
+    const normalizedSym = sym.toLowerCase().replace(/_/g, ' ').trim();
+    const isKnown = commonSymptoms.has(normalizedSym) || allDbSymptoms.some((dbSym) =>
+      dbSym === normalizedSym || dbSym.includes(normalizedSym) || normalizedSym.includes(dbSym)
+    );
+
+    if (!isKnown) {
+      throw new SymptomValidationError(
+        `"${normalizedSym}" is not recognized in our medical database. Please use standard symptoms like fever, cough, etc.`
+      );
+    }
+  }
+
+  try {
+    console.log(`🤖 Valid symptoms. Asking Gemini for prediction...`);
+    const prompt = buildPrompt(symptoms, diseasesReference);
+    let response;
+    try {
+      response = await ai.models.generateContent({
+        model: MODEL_NAME,
+        contents: prompt,
+        config: { responseMimeType: 'application/json', temperature: 0.2 },
+      });
+    } catch (primaryError) {
+      const status = primaryError.status ?? primaryError.code ?? primaryError.error?.code ?? primaryError.error?.status;
+      const message = String(primaryError.message || '').toLowerCase();
+      const quotaExceeded = status === 429 || status === 'RESOURCE_EXHAUSTED'
+        || message.includes('quota exceeded') || message.includes('per day limit exceeded');
+      if (quotaExceeded) {
+        const retryAfter = String(primaryError.message || '').match(/Please retry in\s+([0-9hms.]+)/i)?.[1];
+        throw new GeminiQuotaError(retryAfter
+          ? `Gemini quota is exhausted. Please try again in ${retryAfter}.`
+          : 'Gemini quota or rate limit is exhausted. Please wait for the quota reset and try again.');
+      }
+
+      const retryable = [408, 500, 502, 503, 504, 'UNAVAILABLE'].includes(status)
+        || message.includes('timeout') || message.includes('timed out') || message.includes('temporarily unavailable');
+
+      if (!retryable || FALLBACK_MODEL === MODEL_NAME) throw primaryError;
+      console.warn(`Gemini ${MODEL_NAME} unavailable; trying fallback model ${FALLBACK_MODEL}.`);
+      response = await ai.models.generateContent({
+        model: FALLBACK_MODEL,
+        contents: prompt,
+        config: { responseMimeType: 'application/json', temperature: 0.2 },
+      });
+    }
+
+    const prediction = extractJSON(response.text);
+    const allowedDiseases = new Map(
+      diseasesReference.map((disease) => [disease.diseaseName.trim().toLowerCase(), disease.diseaseName])
+    );
+    const hasSubstanceUseContext = symptoms.some((symptom) =>
+      /\b(drug use|substance use|drug dependence|withdrawal|intoxication)\b/i.test(symptom)
+    );
+    const hasAllergySpecificEvidence = symptoms.some((symptom) =>
+      /\b(hives|itching|itchy|swelling|wheezing|allergic reaction)\b/i.test(symptom)
+    );
+
+    prediction.predictedDiseases = (Array.isArray(prediction.predictedDiseases) ? prediction.predictedDiseases : [])
+      .map((item) => {
+        const submittedName = String(item?.diseaseName || '').trim().toLowerCase();
+        const matchedName = allowedDiseases.get(submittedName);
+        if (!matchedName) return null;
+        if (/addiction|drug abuse|substance use/i.test(matchedName) && !hasSubstanceUseContext) return null;
+        if (/allerg/i.test(matchedName) && !hasAllergySpecificEvidence) return null;
+        const confidence = Number(item.confidence);
+        return {
+          ...item,
+          diseaseName: matchedName,
+          confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.confidence - a.confidence)
+      .slice(0, 3);
+
+    if (prediction.predictedDiseases.length === 0) {
+      throw new PredictionNoMatchError(
+        'These symptoms are not enough for a reliable match in our database. Please consult a doctor or add more relevant details.'
+      );
+    }
+
+    return prediction;
+  } catch (error) {
+    if (error.name !== 'GeminiQuotaError' && (error.status === 429 || error.status === 'RESOURCE_EXHAUSTED')) {
+      const retryAfter = String(error.message || '').match(/Please retry in\s+([0-9hms.]+)/i)?.[1];
+      error = new GeminiQuotaError(retryAfter
+        ? `Gemini quota is exhausted. Please try again in ${retryAfter}.`
+        : 'Gemini quota or rate limit is exhausted. Please wait for the quota reset and try again.');
+    }
+    console.error('Gemini request failed:', {
+      message: error.message,
+      status: error.status ?? error.response?.status,
+      code: error.code ?? error.cause?.code,
+      cause: error.cause?.message,
+    });
+    throw error; 
+  }
 }
 
-module.exports = { predictDisease };
+module.exports = { predictDisease, SymptomValidationError, PredictionNoMatchError, GeminiQuotaError };

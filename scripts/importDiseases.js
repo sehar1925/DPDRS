@@ -1,16 +1,15 @@
-// DPDRS Backend - Import Diseases Dataset
-// Reads 6 CSV files from dataset/ folder and imports into diseases collection
+// DPDRS Backend - Import Diseases Dataset (Batch Processing)
+// Handles large CSV files without memory issues
 
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
+const readline = require('readline');
 const mongoose = require('mongoose');
 const connectDB = require('../config/db');
 
 const DATASET_DIR = path.join(__dirname, '../../dataset');
-
-// Helper: Normalize disease name
-const normalize = (name) => (name || '').toLowerCase().trim();
+const BATCH_SIZE = 500; // Insert 500 diseases at a time
 
 // Simple CSV Parser
 function parseCSVLine(line) {
@@ -20,7 +19,6 @@ function parseCSVLine(line) {
 
   for (let i = 0; i < line.length; i++) {
     const char = line[i];
-
     if (char === '"') {
       if (insideQuotes && line[i + 1] === '"') {
         current += '"';
@@ -39,23 +37,26 @@ function parseCSVLine(line) {
   return result;
 }
 
-// Read CSV file
-function readCSV(filename) {
+// Stream-Read large CSV file line by line
+async function readLargeCSV(filename) {
   const filePath = path.join(DATASET_DIR, filename);
-  console.log(`📖 Reading: ${filename}`);
+  console.log(`📖 Streaming: ${filename}`);
 
-  const content = fs.readFileSync(filePath, 'utf-8');
-  const lines = content.split(/\r?\n/).filter((line) => line.trim() !== '');
+  const stream = fs.createReadStream(filePath, { encoding: 'utf-8' });
+  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
-  const headers = parseCSVLine(lines[0]);
+  let headers = null;
   const rows = [];
 
-  for (let i = 1; i < lines.length; i++) {
-    const values = parseCSVLine(lines[i]);
+  for await (const line of rl) {
+    if (!line.trim()) continue;
+    if (!headers) {
+      headers = parseCSVLine(line);
+      continue;
+    }
+    const values = parseCSVLine(line);
     const row = {};
-    headers.forEach((header, idx) => {
-      row[header] = values[idx] || '';
-    });
+    headers.forEach((h, i) => { row[h] = values[i] || ''; });
     rows.push(row);
   }
 
@@ -63,35 +64,55 @@ function readCSV(filename) {
   return { headers, rows };
 }
 
+// Read small CSV (regular fs)
+function readCSV(filename) {
+  const filePath = path.join(DATASET_DIR, filename);
+  console.log(`📖 Reading: ${filename}`);
+  const content = fs.readFileSync(filePath, 'utf-8');
+  const lines = content.split(/\r?\n/).filter((l) => l.trim() !== '');
+  const headers = parseCSVLine(lines[0]);
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    const values = parseCSVLine(lines[i]);
+    const row = {};
+    headers.forEach((h, idx) => { row[h] = values[idx] || ''; });
+    rows.push(row);
+  }
+  console.log(`   ✅ ${rows.length} rows loaded`);
+  return { headers, rows };
+}
+
+// Normalize disease name
+const normalize = (name) => (name || '').toLowerCase().trim();
+
 // Main import
 async function importDiseases() {
   try {
     console.log('\n════════════════════════════════════════');
-    console.log('🚀 DPDRS Disease Import Script');
+    console.log('🚀 DPDRS Disease Import (SympScan Dataset)');
     console.log('════════════════════════════════════════\n');
 
     await connectDB();
     console.log('');
 
-    // Read symptoms dataset
+    // ── Step 1: Stream-read the large symptoms dataset ──
     const { headers: symptomHeaders, rows: symptomRows } =
-      readCSV('Diseases_and_Symptoms_dataset.csv');
+      await readLargeCSV('Diseases_and_Symptoms_dataset.csv');
 
     const symptomColumns = symptomHeaders.slice(1);
     console.log(`   📊 ${symptomColumns.length} symptom columns\n`);
 
-    // Aggregate symptoms by disease
+    // ── Step 2: Aggregate symptoms per disease ──
     console.log('🔍 Aggregating symptoms by disease...');
     const diseaseSymptomsMap = new Map();
 
     for (const row of symptomRows) {
-      const disease = row['diseases'];
+      const disease = row['diseases'] || row['disease'];
       if (!disease) continue;
 
       if (!diseaseSymptomsMap.has(disease)) {
         diseaseSymptomsMap.set(disease, new Set());
       }
-
       const symptomSet = diseaseSymptomsMap.get(disease);
       for (const symptom of symptomColumns) {
         if (row[symptom] === '1') {
@@ -99,17 +120,15 @@ async function importDiseases() {
         }
       }
     }
-
     console.log(`   ✅ Found ${diseaseSymptomsMap.size} unique diseases\n`);
 
-    // Read supporting CSVs
+    // ── Step 3: Read supporting CSVs ──
     const { rows: descriptionRows } = readCSV('description.csv');
     const { rows: precautionRows } = readCSV('precautions.csv');
     const { rows: medicationRows } = readCSV('medications.csv');
     const { rows: dietRows } = readCSV('diets.csv');
     const { rows: workoutRows } = readCSV('workout.csv');
 
-    // Maps (case-insensitive)
     const descriptionMap = new Map(
       descriptionRows.map((r) => [normalize(r['Disease']), r['Description']])
     );
@@ -125,10 +144,8 @@ async function importDiseases() {
     const dietMap = new Map(dietRows.map((r) => [normalize(r['Disease']), r['Diet']]));
     const workoutMap = new Map(workoutRows.map((r) => [normalize(r['Disease']), r['Workouts']]));
 
-    console.log('\n════════════════════════════════════════');
+    // ── Step 4: Build disease documents ──
     console.log('📦 Building disease documents...');
-    console.log('════════════════════════════════════════\n');
-
     const diseases = [];
 
     for (const [diseaseName, symptomSet] of diseaseSymptomsMap) {
@@ -155,42 +172,38 @@ async function importDiseases() {
         severity,
         treatmentGuidelines: treatmentParts.join(' | ') || 'Consult a doctor for treatment.',
         description: descriptionMap.get(normalizedName) || '',
-        createdAt: new Date(),
-        updatedAt: new Date(),
       });
     }
-
     console.log(`✅ Built ${diseases.length} disease documents\n`);
 
-    // Import
+    // ── Step 5: Insert in batches ──
     const Disease = require('../models/Disease');
 
     console.log('🗑️  Clearing existing diseases...');
-    const deleteResult = await Disease.deleteMany({});
-    console.log(`   Deleted: ${deleteResult.deletedCount} old records\n`);
+    const del = await Disease.deleteMany({});
+    console.log(`   Deleted: ${del.deletedCount} old records\n`);
 
-    console.log('💾 Inserting new diseases...');
-    const insertResult = await Disease.insertMany(diseases, { ordered: false });
-    console.log(`   ✅ Inserted: ${insertResult.length} diseases\n`);
+    console.log(`💾 Inserting in batches of ${BATCH_SIZE}...`);
+    let inserted = 0;
+    for (let i = 0; i < diseases.length; i += BATCH_SIZE) {
+      const batch = diseases.slice(i, i + BATCH_SIZE);
+      const result = await Disease.insertMany(batch, { ordered: false });
+      inserted += result.length;
+      console.log(`   ✅ Batch ${Math.floor(i / BATCH_SIZE) + 1}: ${result.length} inserted`);
+    }
 
-    // Summary
-    console.log('════════════════════════════════════════');
+    console.log('\n════════════════════════════════════════');
     console.log('🎉 IMPORT COMPLETE');
     console.log('════════════════════════════════════════');
-    console.log(`📊 Total diseases: ${insertResult.length}`);
-    console.log(`📊 Sample disease: ${diseases[0].diseaseName}`);
-    console.log(`📊 With description: ${diseases.filter((d) => d.description).length}`);
-    console.log(`📊 With precautions: ${diseases.filter((d) => d.precautions.length > 0).length}`);
-    console.log(`📊 With treatment: ${diseases.filter((d) => d.treatmentGuidelines.length > 50).length}`);
+    console.log(`📊 Total diseases: ${inserted}`);
+    console.log(`📊 Sample: ${diseases[0].diseaseName}`);
     console.log('════════════════════════════════════════\n');
 
     await mongoose.connection.close();
-    console.log('✅ MongoDB connection closed');
     process.exit(0);
   } catch (error) {
     console.error('\n❌ IMPORT FAILED');
     console.error('Error:', error.message);
-    console.error(error.stack);
     process.exit(1);
   }
 }
